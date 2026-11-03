@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: plasso
+          POSTGRES_PASSWORD: plasso
+          POSTGRES_DB: plasso
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U plasso"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://plasso:plasso@localhost:5432/plasso
+      BETTER_AUTH_SECRET: ci-only-secret-not-used-anywhere-else
+      BETTER_AUTH_URL: http://localhost:3000
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.11
+      - run: bun install --frozen-lockfile
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Lint
+        run: bun run lint
+      - name: Schema and migrations agree (no drift)
+        run: bun run db:check
+      - name: Migrations apply cleanly to an empty database
+        run: bun scripts/migrate.ts
+      - name: Migrations are idempotent (second run applies nothing)
+        run: bun scripts/migrate.ts | tee /dev/stderr | grep -q ' 0 new migration'
+      - name: Seed data loads against the migrated schema
+        run: bun scripts/seed.ts
+      - name: Build
+        run: bun run build

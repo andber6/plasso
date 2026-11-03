@@ -69,6 +69,13 @@ src/
 scripts/seed.ts           demo data
 ```
 
+## Database migrations
+
+Migrations run automatically in every Vercel production build, before the new
+code goes live; CI checks that `schema.ts` and `drizzle/` agree and that every
+migration applies to an empty database. Workflow and rules (backward-compatible
+changes only) are in [AGENTS.md](AGENTS.md#database-migrations).
+
 ## Matching
 
 `src/lib/market/match.ts`: city 25 · type 20 · size 20 · price 20 · move-in date 10 ·

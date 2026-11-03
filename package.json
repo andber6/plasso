@@ -9,9 +9,11 @@
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
+    "db:migrate": "bun --env-file=.env.local scripts/migrate.ts",
     "db:seed": "bun --env-file=.env.local scripts/seed.ts",
-    "admin:verify": "bun --env-file=.env.local scripts/verify-admin.ts"
+    "admin:verify": "bun --env-file=.env.local scripts/verify-admin.ts",
+    "db:check": "drizzle-kit check && drizzle-kit generate --name drift_check && git diff --exit-code --stat -- drizzle && test -z \"$(git ls-files --others --exclude-standard drizzle)\"",
+    "vercel-build": "bun scripts/migrate.ts && next build"
   },
   "dependencies": {
     "@vercel/blob": "^2.8.2",
