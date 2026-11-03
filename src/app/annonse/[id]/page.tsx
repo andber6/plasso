@@ -4,14 +4,14 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 
-import { toggleSave } from '@/app/actions';
+import { publishPendingNeed, toggleSave } from '@/app/actions';
 import { InquiryForm } from '@/components/inquiry-form';
 import { MatchReasons } from '@/components/match-reasons';
 import { MatchRing } from '@/components/match-ring';
 import { OwnerControls } from '@/components/owner-controls';
 import { PostCard } from '@/components/post-card';
 import { PostMenu } from '@/components/post-menu';
-import { getUser } from '@/lib/auth';
+import { getUser, isAdmin } from '@/lib/auth';
 import { photoUrl, spaceTypeLabel } from '@/lib/market/catalog';
 import { formatDate, formatLease, formatNumber, formatSize, nextWeekdays, perM2Year } from '@/lib/market/format';
 import { bestAgainstMine, matchesFor } from '@/lib/market/match';
@@ -41,12 +41,14 @@ export default async function PostPage({ params }: { params: Params }) {
 
   const user = await getUser();
   const mine = post.user_id === user?.id;
-  if (!mine && post.status !== 'active') notFound();
-  if (!mine && (await blockedIds(user?.id)).includes(post.user_id)) notFound();
+  // Admins can open unpublished posts (e.g. unconfirmed leads from /admin) read-only.
+  const adminPreview = !mine && post.status !== 'active' && isAdmin(user);
+  if (!mine && !adminPreview && post.status !== 'active') notFound();
+  if (!mine && !adminPreview && (await blockedIds(user?.id)).includes(post.user_id)) notFound();
   const isOffer = post.kind === 'offer';
 
   const [own, saved] = await Promise.all([myPosts(user?.id), savedIds(user?.id)]);
-  if (!mine) await track('view', { userId: user?.id, postId: post.id, data: { kind: post.kind, city: post.city, space_type: post.space_type } });
+  if (!mine && !adminPreview) await track('view', { userId: user?.id, postId: post.id, data: { kind: post.kind, city: post.city, space_type: post.space_type } });
 
   const best = mine ? null : bestAgainstMine(post, own);
   const ownMatches = mine ? matchesFor(post, await oppositePosts(post.kind, post.user_id)) : [];
@@ -106,7 +108,21 @@ export default async function PostPage({ params }: { params: Params }) {
         </div>
 
         <aside className="flex flex-col gap-5 lg:sticky lg:top-24 lg:self-start">
-          {mine ? (
+          {adminPreview ? (
+            <div className="flex flex-col gap-3 rounded-[22px] border border-warning/30 bg-warning/10 p-5">
+              <h2 className="text-lg font-semibold">{post.status === 'pending' ? 'Ubekreftet leieønske' : 'Ikke publisert'}</h2>
+              <p className="text-sm text-muted">
+                {post.status === 'pending'
+                  ? 'Sendt inn fra forsiden. Personen har ikke bekreftet e-posten ennå, så bare Plasso-teamet ser dette.'
+                  : `Status: ${post.status}. Bare du som admin ser denne siden.`}
+              </p>
+              {post.status === 'pending' ? (
+                <form action={publishPendingNeed.bind(null, post.id)}>
+                  <button className="h-10 w-full rounded-full bg-accent text-sm font-semibold text-white hover:bg-accent-hover">Publiser leieønsket</button>
+                </form>
+              ) : null}
+            </div>
+          ) : mine ? (
             <OwnerControls id={post.id} status={post.status as 'active' | 'paused' | 'rented' | 'hidden' | 'pending'} />
           ) : (
             <>

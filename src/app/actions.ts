@@ -17,7 +17,7 @@ import { matchesFor } from '@/lib/market/match';
 import { activePosts, blockedIds, getPost, getProfile } from '@/lib/queries';
 import { safeNext } from '@/lib/safe-next';
 import { notifyMatches } from '@/lib/notify';
-import { activatePendingPosts } from '@/lib/pending';
+import { LEAD_PREFIX, newLeadSecret, publishLead } from '@/lib/leads';
 import { linkAnonEvents, track } from '@/lib/track';
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
@@ -96,7 +96,6 @@ export async function signIn(_: FormState, form: FormData): Promise<FormState> {
     return { error: 'Feil e-post eller passord.' };
   }
   await linkAnonEvents(userId);
-  await activatePendingPosts(userId);
   redirect(safeNext(form.get('next')));
 }
 
@@ -144,10 +143,11 @@ export async function completeProfile(_: FormState, form: FormData): Promise<For
 export type LeadState = { error?: string; ok?: boolean; emailSent?: boolean; matches?: number } | undefined;
 
 /**
- * The front-page "tell us what you need" form: no account needed. Creates (or
- * reuses) the user by e-mail and stores the need as 'pending' until they click
- * the confirmation link, so nobody can publish needs in someone else's name. The
- * lead is visible in /admin immediately either way.
+ * The front-page "tell us what you need" form: no account needed. The need is
+ * stored as 'pending' on a stand-alone lead profile (never on an account, so a
+ * typed-in e-mail can't touch someone else's account) until the confirmation
+ * link in the e-mail is clicked; see lib/leads.ts. The lead is visible in
+ * /admin immediately either way.
  */
 export async function submitNeedLead(_: LeadState, form: FormData): Promise<LeadState> {
   if (str(form.get('website'))) return { ok: true, emailSent: false, matches: 0 }; // honeypot for bots
@@ -164,21 +164,19 @@ export async function submitNeedLead(_: LeadState, form: FormData): Promise<Lead
   if (price <= 0) return { error: 'Hva kan dere maks betale i måneden?' };
   const available = /^\d{4}-\d{2}-\d{2}$/.test(str(form.get('available_from'))) ? str(form.get('available_from')) : '';
 
-  const [existing] = await db.select().from(user).where(eq(user.email, email));
-  const userId = existing?.id ?? crypto.randomUUID();
-  if (!existing) await db.insert(user).values({ id: userId, name, email, emailVerified: false });
-
   const [{ n: pendingToday }] = await db
     .select({ n: sql<number>`count(*)::int` })
     .from(posts)
-    .where(and(eq(posts.user_id, userId), eq(posts.status, 'pending'), gte(posts.created_at, new Date(Date.now() - 86400000))));
+    .innerJoin(profiles, eq(profiles.user_id, posts.user_id))
+    .where(and(eq(profiles.email, email), eq(posts.status, 'pending'), gte(posts.created_at, new Date(Date.now() - 86400000))));
   if (pendingToday >= 3) return { error: 'Vi har allerede fått flere leieønsker fra denne e-posten i dag. Sjekk innboksen din.' };
 
+  const userId = `${LEAD_PREFIX}${crypto.randomUUID()}`;
   const company = str(form.get('company'), 160);
   await db
     .insert(profiles)
-    .values({ user_id: userId, name, email, company, phone: str(form.get('phone'), 40), role: 'leietaker', contact_ok: form.get('contact_ok') === 'on' })
-    .onConflictDoNothing();
+    .values({ user_id: userId, name, email, company, phone: str(form.get('phone'), 40), role: 'leietaker', contact_ok: form.get('contact_ok') === 'on' });
+  const { secret, hash } = newLeadSecret();
   const [row] = await db
     .insert(posts)
     .values({
@@ -196,6 +194,7 @@ export async function submitNeedLead(_: LeadState, form: FormData): Promise<Lead
       company,
       contact_name: name,
       status: 'pending',
+      confirm_token: hash,
     })
     .returning();
 
@@ -210,7 +209,7 @@ export async function submitNeedLead(_: LeadState, form: FormData): Promise<Lead
         body: {
           email,
           name,
-          callbackURL: `/auth/ferdig?neste=${encodeURIComponent(`/ny/match/${row.id}`)}`,
+          callbackURL: `/auth/ferdig?bekreft=${row.id}.${secret}&neste=${encodeURIComponent(`/ny/match/${row.id}`)}`,
           errorCallbackURL: '/logg-inn?feil=lenke',
           metadata: { purpose: 'lead' },
         },
@@ -348,8 +347,9 @@ function ownPost(id: string, userId: string) {
 export async function setPostStatus(id: string, status: 'active' | 'paused' | 'rented') {
   const u = await requireUser();
   if (!['active', 'paused', 'rented'].includes(status)) return;
-  // A post hidden by an admin stays hidden; only an admin can change it.
-  await db.update(posts).set({ status }).where(and(ownPost(id, u.id), ne(posts.status, 'hidden')));
+  // Hidden (by an admin) and pending (awaiting e-mail confirmation) posts can't be
+  // changed by their owner: only an admin or the confirmation link moves them.
+  await db.update(posts).set({ status }).where(and(ownPost(id, u.id), ne(posts.status, 'hidden'), ne(posts.status, 'pending')));
   revalidatePath('/', 'layout');
 }
 
@@ -435,6 +435,14 @@ export async function blockUser(blockedUserId: string) {
 }
 
 // ── Admin ──────────────────────────────────────────────────────────────────
+
+/** Publish an unconfirmed lead by hand, e.g. while e-mail delivery is off. */
+export async function publishPendingNeed(postId: string) {
+  const u = await requireUser();
+  if (!isAdmin(u)) return;
+  await publishLead(postId);
+  revalidatePath('/', 'layout');
+}
 
 export async function resolveReport(id: string, removePost: boolean) {
   const u = await requireUser();

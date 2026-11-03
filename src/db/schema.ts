@@ -89,6 +89,8 @@ export const posts = pgTable(
     contact_name: text('contact_name').notNull().default(''),
     /** active | paused | rented | hidden (removed by an admin) | pending (sent in without an account, e-mail not confirmed yet) */
     status: text('status').notNull().default('active'),
+    /** SHA-256 of the one-time secret in a pending need's confirmation link; null once confirmed. */
+    confirm_token: text('confirm_token'),
     created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [index('posts_kind_idx').on(t.kind, t.status), index('posts_user_idx').on(t.user_id)],

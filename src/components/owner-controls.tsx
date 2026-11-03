@@ -13,6 +13,14 @@ const STATUSES = [
 
 export function OwnerControls({ id, status }: { id: string; status: 'active' | 'paused' | 'rented' | 'hidden' | 'pending' }) {
   const [pending, start] = useTransition();
+  if (status === 'pending') {
+    return (
+      <div className="flex flex-col gap-2 rounded-[22px] border border-warning/30 bg-warning/10 p-5">
+        <h2 className="text-lg font-semibold">Venter på bekreftelse</h2>
+        <p className="text-sm text-muted">Klikk på lenken i e-posten vi sendte deg for å publisere leieønsket.</p>
+      </div>
+    );
+  }
   if (status === 'hidden') {
     return (
       <div className="flex flex-col gap-2 rounded-[22px] border border-danger/30 bg-danger/5 p-5">
