@@ -1,36 +1,83 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Plasso
 
-## Getting Started
+**Riktig lokale. Riktig match.** A free Norwegian marketplace for næringslokaler (commercial premises).
+Tenants post a *leieønske* (what they need), landlords post an *utleieannonse* (what they have), and
+Plasso scores every pair 0–100 % with plain-Norwegian reasons.
 
-First, run the development server:
+This is the web version of the prototype originally built in Newly (Expo app + Cloudflare
+Workers). The matching engine, data model, seed data, copy and the "Fjord og betong" look
+are carried over from it; the rest is rebuilt on Next.js.
+
+The marketplace is free for users. For the Plasso team, every search, view, save, inquiry
+and post is logged as a demand signal, and `/admin` turns that into a demand dashboard and a
+lead list (contact details only for users who opted in).
+
+## Run locally
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+bun install
+createdb plasso                 # local Postgres
+cp .env.example .env.local      # then fill in, see below
+bun run db:migrate
+bun run db:seed                 # demo listings + 30 days of synthetic searches
+bun run dev                     # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+To get into `/admin`: sign up with an address listed in `ADMIN_EMAILS`, then run
+`bun run admin:verify you@example.com`. Admin access needs both; until real e-mail
+verification exists, an unverified sign-up with an admin address gets nothing.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+`.env.local`:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+| Var | |
+|---|---|
+| `DATABASE_URL` | `postgres://localhost:5432/plasso` locally, Neon in production |
+| `BETTER_AUTH_SECRET` | any long random string |
+| `BETTER_AUTH_URL` | `http://localhost:3000` (or the deployed URL) |
+| `ADMIN_EMAILS` | comma-separated; these accounts see **Etterspørsel** (`/admin`) once verified with `bun run admin:verify` |
+| `BLOB_READ_WRITE_TOKEN` | optional; without it, photo uploads go to `public/uploads` (dev only) |
 
-## Learn More
+Remove the demo data with `bun run db:seed --reset`.
 
-To learn more about Next.js, take a look at the following resources:
+## Routes
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+| Route | |
+|---|---|
+| `/` | Utforsk: toggle *Jeg vil leie / Jeg vil leie ut*, filters, feed ranked by match against your own posts |
+| `/annonse/[id]` | Listing: match ring + reasons, request viewing / contact, save, report, block; owner controls |
+| `/ny` → `/ny/match/[id]` | Post a need or an offer (with photo upload), then the match reveal |
+| `/matcher` | Every one of your active posts with its matches |
+| `/mine` | Your posts, inquiries sent/received (with contact details), saved listings |
+| `/logg-inn`, `/profil` | Account (e-mail + password), role, contact opt-in, delete account |
+| `/admin` | **Demand dashboard**: demand vs supply per city/type, sizes and budgets searched, unmet demand, leads, popular listings, reports |
+| `/admin/epost` | E-mail outbox (match alerts, inquiries) until an e-mail provider is connected |
+| `/admin/leads.csv` | Opted-in leads export |
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Where things live
 
-## Deploy on Vercel
+```
+src/
+├── app/                  routes + actions.ts (all server actions)
+├── components/           UI (post cards, match ring, filter bar, forms)
+├── db/schema.ts          Drizzle schema (auth, marketplace, events, emails)
+├── lib/market/           ported from Newly: catalog, format, match (scoring)
+├── lib/insights.ts       demand dashboard aggregations
+├── lib/track.ts          demand event logging (anon cookie → user on sign-in)
+├── lib/email.ts          e-mail outbox
+└── proxy.ts              sets the anonymous visitor cookie
+scripts/seed.ts           demo data
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+## Matching
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+`src/lib/market/match.ts`: city 25 · type 20 · size 20 · price 20 · move-in date 10 ·
+facilities 5. The facilities rule is new (the Newly version captured facilities but never
+scored them). When a post is published, matching also runs server-side and e-mails
+the owners of every listing that scores ≥ 70 %.
+
+## Not done yet
+
+- Deploy: Vercel + Neon Postgres + Vercel Blob (needs a Vercel login)
+- Real e-mail delivery (outbox only today), and magic-link sign-in once e-mail works
+- Map / geocoding instead of a fixed city list
+- Privacy policy needs a proper review before launch (`/personvern` is a draft)
