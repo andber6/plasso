@@ -33,7 +33,7 @@ verification exists, an unverified sign-up with an admin address gets nothing.
 |---|---|
 | `DATABASE_URL` | `postgres://localhost:5432/plasso` locally, Neon in production |
 | `BETTER_AUTH_SECRET` | any long random string |
-| `BETTER_AUTH_URL` | `http://localhost:3000` (or the deployed URL) |
+| `BETTER_AUTH_URL` | `http://localhost:3000` locally; optional on Vercel (defaults to the production domain) |
 | `ADMIN_EMAILS` | comma-separated; these accounts see **Etterspørsel** (`/admin`) once verified with `bun run admin:verify` |
 | `BLOB_READ_WRITE_TOKEN` | optional; without it, photo uploads go to `public/uploads` (dev only) |
 
@@ -77,7 +77,6 @@ the owners of every listing that scores ≥ 70 %.
 
 ## Not done yet
 
-- Deploy: Vercel + Neon Postgres + Vercel Blob (needs a Vercel login)
 - Real e-mail delivery (outbox only today), and magic-link sign-in once e-mail works
 - Map / geocoding instead of a fixed city list
 - Privacy policy needs a proper review before launch (`/personvern` is a draft)

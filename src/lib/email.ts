@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { db, emails } from '@/db';
+import { SITE_URL } from '@/lib/site-url';
 
 /**
  * Queue an e-mail. Every message lands in the `emails` outbox (readable under
@@ -12,5 +13,5 @@ export async function sendEmail(to: string, subject: string, body: string) {
 }
 
 export function siteUrl(path = ''): string {
-  return `${process.env.BETTER_AUTH_URL ?? 'http://localhost:3000'}${path}`;
+  return `${SITE_URL}${path}`;
 }

@@ -6,8 +6,11 @@ import { headers } from 'next/headers';
 import { cache } from 'react';
 
 import { account, db, session, user, verification } from '@/db';
+import { SITE_URL, TRUSTED_ORIGINS } from '@/lib/site-url';
 
 export const auth = betterAuth({
+  baseURL: SITE_URL,
+  trustedOrigins: TRUSTED_ORIGINS,
   database: drizzleAdapter(db, { provider: 'pg', schema: { user, session, account, verification } }),
   emailAndPassword: { enabled: true, minPasswordLength: 8 },
   session: { expiresIn: 60 * 60 * 24 * 60 },
