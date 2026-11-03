@@ -3,20 +3,21 @@
 import { writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 import { put } from '@vercel/blob';
-import { and, eq, ne, or } from 'drizzle-orm';
+import { and, eq, gte, ne, or, sql } from 'drizzle-orm';
 import { revalidatePath } from 'next/cache';
 import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { after } from 'next/server';
 
-import { blocks, db, events, inquiries, posts, profiles, reports, savedPosts, user, type PostRow } from '@/db';
+import { blocks, db, emails, events, inquiries, posts, profiles, reports, savedPosts, user } from '@/db';
 import { auth, getUser, isAdmin } from '@/lib/auth';
-import { sendEmail, siteUrl } from '@/lib/email';
+import { emailEnabled, sendEmail, siteUrl } from '@/lib/email';
 import { CITIES, DEFAULT_PHOTO, FACILITIES, LEASE_OPTIONS, PHOTO_KEYS, SPACE_TYPES, spaceTypeLabel } from '@/lib/market/catalog';
-import { formatNumber, formatSize } from '@/lib/market/format';
-import { matchesFor, scoreMatch, targetFromPost } from '@/lib/market/match';
-import { blockedIds, getPost, getProfile, oppositePosts } from '@/lib/queries';
+import { matchesFor } from '@/lib/market/match';
+import { activePosts, blockedIds, getPost, getProfile } from '@/lib/queries';
 import { safeNext } from '@/lib/safe-next';
+import { notifyMatches } from '@/lib/notify';
+import { activatePendingPosts } from '@/lib/pending';
 import { linkAnonEvents, track } from '@/lib/track';
 
 export type FormState = { error?: string; ok?: boolean } | undefined;
@@ -33,6 +34,25 @@ async function requireUser() {
   const u = await getUser();
   if (!u) redirect('/logg-inn');
   return u;
+}
+
+/** Magic-link users have no profile until onboarding; send them there first. */
+async function requireProfile(userId: string, next: string) {
+  const profile = await getProfile(userId);
+  if (!profile) redirect(`/velkommen?neste=${encodeURIComponent(next)}`);
+  return profile;
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const ROLE_IDS = ['leietaker', 'utleier', 'megler'];
+
+/** At most `max` e-mails with this subject to one address per `minutes` (stops link spam). */
+async function tooManyEmails(to: string, subject: string, max: number, minutes: number) {
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(emails)
+    .where(and(eq(emails.to, to), eq(emails.subject, subject), gte(emails.created_at, new Date(Date.now() - minutes * 60000))));
+  return n >= max;
 }
 
 // ── Account ────────────────────────────────────────────────────────────────
@@ -57,7 +77,7 @@ export async function signUp(_: FormState, form: FormData): Promise<FormState> {
     email,
     company: str(form.get('company'), 160),
     phone: str(form.get('phone'), 40),
-    role: ['leietaker', 'utleier', 'megler'].includes(role) ? role : 'leietaker',
+    role: ROLE_IDS.includes(role) ? role : 'leietaker',
     contact_ok: form.get('contact_ok') === 'on',
   });
   await linkAnonEvents(userId);
@@ -76,7 +96,133 @@ export async function signIn(_: FormState, form: FormData): Promise<FormState> {
     return { error: 'Feil e-post eller passord.' };
   }
   await linkAnonEvents(userId);
+  await activatePendingPosts(userId);
   redirect(safeNext(form.get('next')));
+}
+
+/** Passwordless sign-in / sign-up: e-mail a one-time link. */
+export async function requestMagicLink(_: FormState, form: FormData): Promise<FormState> {
+  const email = str(form.get('email'), 200).toLowerCase();
+  if (!EMAIL_RE.test(email)) return { error: 'Skriv inn en gyldig e-postadresse.' };
+  if (await tooManyEmails(email, 'Logg inn på Plasso', 3, 15)) return { error: 'Vi har nettopp sendt deg flere lenker. Sjekk innboksen (og søppelpost), eller vent litt.' };
+  const next = safeNext(form.get('next'));
+  try {
+    await auth.api.signInMagicLink({
+      body: { email, callbackURL: `/auth/ferdig?neste=${encodeURIComponent(next)}`, errorCallbackURL: '/logg-inn?feil=lenke' },
+      headers: await headers(),
+    });
+  } catch {
+    return { error: 'Kunne ikke sende lenken. Prøv igjen om litt.' };
+  }
+  return { ok: true };
+}
+
+/** First sign-in via magic link: collect the profile the password sign-up used to ask for. */
+export async function completeProfile(_: FormState, form: FormData): Promise<FormState> {
+  const u = await requireUser();
+  const name = str(form.get('name'), 120);
+  if (!name) return { error: 'Skriv inn navnet ditt.' };
+  const role = str(form.get('role'), 20);
+  await db
+    .insert(profiles)
+    .values({
+      user_id: u.id,
+      name,
+      email: u.email,
+      company: str(form.get('company'), 160),
+      phone: str(form.get('phone'), 40),
+      role: ROLE_IDS.includes(role) ? role : 'leietaker',
+      contact_ok: form.get('contact_ok') === 'on',
+    })
+    .onConflictDoNothing();
+  if (u.name !== name) await db.update(user).set({ name }).where(eq(user.id, u.id));
+  await track('signup', { userId: u.id, data: { role, via: 'magic-link' } });
+  revalidatePath('/', 'layout');
+  redirect(safeNext(form.get('next')));
+}
+
+export type LeadState = { error?: string; ok?: boolean; emailSent?: boolean; matches?: number } | undefined;
+
+/**
+ * The front-page "tell us what you need" form: no account needed. Creates (or
+ * reuses) the user by e-mail and stores the need as 'pending' until they click
+ * the confirmation link, so nobody can publish needs in someone else's name. The
+ * lead is visible in /admin immediately either way.
+ */
+export async function submitNeedLead(_: LeadState, form: FormData): Promise<LeadState> {
+  if (str(form.get('website'))) return { ok: true, emailSent: false, matches: 0 }; // honeypot for bots
+  const name = str(form.get('name'), 120);
+  const email = str(form.get('email'), 200).toLowerCase();
+  if (!name) return { error: 'Skriv inn navnet ditt.' };
+  if (!EMAIL_RE.test(email)) return { error: 'Skriv inn en gyldig e-postadresse.' };
+  const spaceType = SPACE_TYPES.some((t) => t.id === form.get('space_type')) ? str(form.get('space_type')) : 'kontor';
+  const city = CITIES.includes(str(form.get('city'))) ? str(form.get('city')) : 'Oslo';
+  const min = int(form.get('size_min'));
+  const max = int(form.get('size_max')) || min;
+  const price = int(form.get('price'));
+  if (min <= 0) return { error: 'Hvor mange m² trenger dere?' };
+  if (price <= 0) return { error: 'Hva kan dere maks betale i måneden?' };
+  const available = /^\d{4}-\d{2}-\d{2}$/.test(str(form.get('available_from'))) ? str(form.get('available_from')) : '';
+
+  const [existing] = await db.select().from(user).where(eq(user.email, email));
+  const userId = existing?.id ?? crypto.randomUUID();
+  if (!existing) await db.insert(user).values({ id: userId, name, email, emailVerified: false });
+
+  const [{ n: pendingToday }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(posts)
+    .where(and(eq(posts.user_id, userId), eq(posts.status, 'pending'), gte(posts.created_at, new Date(Date.now() - 86400000))));
+  if (pendingToday >= 3) return { error: 'Vi har allerede fått flere leieønsker fra denne e-posten i dag. Sjekk innboksen din.' };
+
+  const company = str(form.get('company'), 160);
+  await db
+    .insert(profiles)
+    .values({ user_id: userId, name, email, company, phone: str(form.get('phone'), 40), role: 'leietaker', contact_ok: form.get('contact_ok') === 'on' })
+    .onConflictDoNothing();
+  const [row] = await db
+    .insert(posts)
+    .values({
+      id: crypto.randomUUID(),
+      user_id: userId,
+      kind: 'need',
+      space_type: spaceType,
+      city,
+      size_min: Math.min(min, max),
+      size_max: Math.max(min, max),
+      price,
+      available_from: available,
+      title: `${company || name} søker ${spaceTypeLabel(spaceType).toLowerCase()} i ${city}`,
+      description: str(form.get('description'), 3000),
+      company,
+      contact_name: name,
+      status: 'pending',
+    })
+    .returning();
+
+  await linkAnonEvents(userId);
+  await track('post', { userId, postId: row.id, data: { kind: 'need', via: 'skjema', space_type: spaceType, city, size_min: row.size_min, size_max: row.size_max, price } });
+  const matches = matchesFor(row, await activePosts('offer')).length;
+
+  let emailSent = false;
+  if (emailEnabled()) {
+    try {
+      await auth.api.signInMagicLink({
+        body: {
+          email,
+          name,
+          callbackURL: `/auth/ferdig?neste=${encodeURIComponent(`/ny/match/${row.id}`)}`,
+          errorCallbackURL: '/logg-inn?feil=lenke',
+          metadata: { purpose: 'lead' },
+        },
+        headers: await headers(),
+      });
+      emailSent = true;
+    } catch (err) {
+      console.error('[lead] could not send confirmation', err);
+    }
+  }
+  revalidatePath('/admin');
+  return { ok: true, emailSent, matches };
 }
 
 export async function signOut() {
@@ -135,8 +281,8 @@ async function storeUpload(file: File): Promise<string> {
 
 export async function createPost(_: FormState, form: FormData): Promise<FormState> {
   const u = await requireUser();
-  const profile = await getProfile(u.id);
   const kind = str(form.get('kind')) === 'offer' ? 'offer' : 'need';
+  const profile = await requireProfile(u.id, `/ny?type=${kind}`);
   const isOffer = kind === 'offer';
   const spaceType = SPACE_TYPES.some((t) => t.id === form.get('space_type')) ? str(form.get('space_type')) : 'kontor';
   const city = CITIES.includes(str(form.get('city'))) ? str(form.get('city')) : 'Oslo';
@@ -195,52 +341,6 @@ export async function createPost(_: FormState, form: FormData): Promise<FormStat
   redirect(`/ny/match/${row.id}`);
 }
 
-/**
- * Server-side matching: tell the owner of every listing that fits the new post
- * (≥ 70 %) and give the author a summary. This is what the Newly version promised
- * ("Vi viser nye matcher så snart de dukker opp") but could not do.
- */
-async function notifyMatches(post: PostRow) {
-  const others = await oppositePosts(post.kind, post.user_id);
-  const strong = others
-    .map((other) => ({ other, result: scoreMatch(post, targetFromPost(other), other.kind === 'offer') }))
-    .filter((m) => m.result.score >= 70);
-  const owners = await db.select().from(profiles);
-  const byId = new Map(owners.map((p) => [p.user_id, p]));
-
-  for (const { other, result } of strong) {
-    const owner = byId.get(other.user_id);
-    if (!owner?.email) continue;
-    const what = post.kind === 'need' ? 'En ny leietaker passer lokalet ditt' : 'Et nytt lokale passer leieønsket ditt';
-    await sendEmail(
-      owner.email,
-      `${what}: ${result.score} % samsvar`,
-      [
-        `Hei ${owner.name.split(' ')[0]},`,
-        '',
-        `${what} «${other.title}».`,
-        '',
-        `${post.title}`,
-        `${spaceTypeLabel(post.space_type)} · ${post.district ? `${post.district}, ` : ''}${post.city} · ${formatSize(post)} m² · ${formatNumber(post.price)} kr/mnd`,
-        '',
-        ...result.reasons.map((r) => `${r.ok ? '✓' : '✗'} ${r.text}`),
-        '',
-        `Se annonsen: ${siteUrl(`/annonse/${post.id}`)}`,
-      ].join('\n'),
-    );
-  }
-
-  const author = byId.get(post.user_id);
-  const mine = matchesFor(post, others, 70);
-  if (author?.email && mine.length) {
-    await sendEmail(
-      author.email,
-      `${mine.length} ${mine.length === 1 ? 'match' : 'matcher'} på «${post.title}»`,
-      [`Hei ${author.name.split(' ')[0]},`, '', ...mine.slice(0, 5).map((m) => `${m.result.score} % · ${m.post.title} — ${siteUrl(`/annonse/${m.post.id}`)}`), '', `Alle matcher: ${siteUrl('/matcher')}`].join('\n'),
-    );
-  }
-}
-
 function ownPost(id: string, userId: string) {
   return and(eq(posts.id, id), eq(posts.user_id, userId));
 }
@@ -279,6 +379,7 @@ export async function toggleSave(postId: string) {
 export async function sendInquiry(_: FormState, form: FormData): Promise<FormState> {
   const u = await requireUser();
   const kind = str(form.get('kind')) === 'viewing' ? 'viewing' : 'contact';
+  await requireProfile(u.id, `/annonse/${str(form.get('post_id'), 80)}`);
   const post = await getPost(str(form.get('post_id'), 80));
   if (!post || post.status !== 'active') return { error: 'Annonsen finnes ikke lenger.' };
   if (post.user_id === u.id) return { error: 'Dette er din egen annonse.' };
@@ -310,11 +411,10 @@ export async function sendInquiry(_: FormState, form: FormData): Promise<FormSta
         '',
         `E-post: ${from?.email ?? u.email}`,
         from?.phone ? `Telefon: ${from.phone}` : '',
-        '',
-        `Svar direkte, eller se alle forespørsler: ${siteUrl('/mine')}`,
       ]
         .filter((l, i, a) => l || a[i - 1])
         .join('\n'),
+      { button: { label: 'Se forespørselen', url: siteUrl('/mine') } },
     );
   }
   revalidatePath('/mine');

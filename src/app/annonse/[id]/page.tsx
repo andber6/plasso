@@ -107,7 +107,7 @@ export default async function PostPage({ params }: { params: Params }) {
 
         <aside className="flex flex-col gap-5 lg:sticky lg:top-24 lg:self-start">
           {mine ? (
-            <OwnerControls id={post.id} status={post.status as 'active' | 'paused' | 'rented' | 'hidden'} />
+            <OwnerControls id={post.id} status={post.status as 'active' | 'paused' | 'rented' | 'hidden' | 'pending'} />
           ) : (
             <>
               {best ? (

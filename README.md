@@ -36,6 +36,7 @@ verification exists, an unverified sign-up with an admin address gets nothing.
 | `BETTER_AUTH_URL` | `http://localhost:3000` locally; optional on Vercel (defaults to the production domain) |
 | `ADMIN_EMAILS` | comma-separated; these accounts see **Etterspørsel** (`/admin`) once verified with `bun run admin:verify` |
 | `BLOB_READ_WRITE_TOKEN` | optional; without it, photo uploads go to `public/uploads` (dev only) |
+| `RESEND_API_KEY`, `EMAIL_FROM` | optional; turn on real e-mail via Resend and passwordless sign-in. `EMAIL_FROM` must be on a domain verified in Resend, e.g. `Plasso <hei@plasso.no>`. `EMAIL_REPLY_TO` is optional |
 
 Remove the demo data with `bun run db:seed --reset`.
 
@@ -77,6 +78,6 @@ the owners of every listing that scores ≥ 70 %.
 
 ## Not done yet
 
-- Real e-mail delivery (outbox only today), and magic-link sign-in once e-mail works
+- Connect a domain in Resend to switch on real e-mail and magic-link sign-in (the code is ready)
 - Map / geocoding instead of a fixed city list
 - Privacy policy needs a proper review before launch (`/personvern` is a draft)

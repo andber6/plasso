@@ -43,6 +43,8 @@ export async function demandInsights(days = 30) {
   const active = allPosts.filter((p) => p.status === 'active');
   const offers = active.filter((p) => p.kind === 'offer');
   const needs = active.filter((p) => p.kind === 'need');
+  // Needs sent in through the front-page form whose e-mail isn't confirmed yet. Not public, but real demand.
+  const pendingNeeds = allPosts.filter((p) => p.kind === 'need' && p.status === 'pending');
   const searches = ev.filter((e) => e.type === 'search');
   const views = ev.filter((e) => e.type === 'view');
   const visitors = new Set(ev.map((e) => e.user_id ?? e.anon_id).filter(Boolean)).size;
@@ -82,7 +84,7 @@ export async function demandInsights(days = 30) {
 
   // Unmet demand: needs where nothing on Plasso reaches 70 %. Each one is a
   // tenant actively looking that we could help find space elsewhere.
-  const unmet = needs
+  const unmet = [...needs, ...pendingNeeds]
     .map((need) => ({ need, best: matchesFor(need, offers, 0)[0]?.result.score ?? 0, owner: profs.find((p) => p.user_id === need.user_id) }))
     .filter((r) => r.best < 70)
     .sort((a, b) => a.best - b.best);
@@ -99,7 +101,7 @@ export async function demandInsights(days = 30) {
       const wantsType = top(countBy([...s.map((x) => x.data.space_type as string), ...mine.filter((m) => m.kind === 'need').map((m) => m.space_type)], (x) => x), 1)[0]?.key;
       const sent = inq.filter((i) => i.from_user_id === p.user_id).length;
       const lastActive = e.reduce<Date | null>((d, x) => (!d || x.created_at > d ? x.created_at : d), null) ?? p.created_at;
-      const activeNeeds = mine.filter((m) => m.kind === 'need' && m.status === 'active');
+      const activeNeeds = mine.filter((m) => m.kind === 'need' && (m.status === 'active' || m.status === 'pending'));
       const activeOffers = mine.filter((m) => m.kind === 'offer' && m.status === 'active');
       const score = activeNeeds.length * 30 + activeOffers.length * 5 + sent * 15 + s.length * 2 + e.filter((x) => x.type === 'view').length + e.filter((x) => x.type === 'save').length * 3;
       return { profile: p, needs: activeNeeds, offers: activeOffers, searches: s.length, views: e.filter((x) => x.type === 'view').length, sent, wantsCity, wantsType: wantsType ? spaceTypeLabel(wantsType) : null, lastActive, score };
@@ -115,6 +117,7 @@ export async function demandInsights(days = 30) {
       searches: searches.length,
       signups: recentSignups,
       needs: needs.length,
+      pendingNeeds: pendingNeeds.length,
       offers: offers.length,
       inquiries: inq.filter((i) => i.created_at >= since).length,
     },

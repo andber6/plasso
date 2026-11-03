@@ -11,7 +11,7 @@ import { inquiriesFor, myPosts, savedPostsFor } from '@/lib/queries';
 
 export const metadata: Metadata = { title: 'Mine annonser' };
 
-const STATUS_LABEL: Record<string, string> = { active: 'Aktiv', paused: 'Pauset', rented: 'Utleid', hidden: 'Skjult av Plasso' };
+const STATUS_LABEL: Record<string, string> = { active: 'Aktiv', paused: 'Pauset', rented: 'Utleid', hidden: 'Skjult av Plasso', pending: 'Venter på bekreftelse' };
 
 export default async function MinePage() {
   const user = await getUser();

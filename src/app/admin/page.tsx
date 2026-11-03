@@ -122,7 +122,7 @@ export default async function AdminPage() {
         <Stat value={d.kpis.visitors} label="Besøkende" />
         <Stat value={d.kpis.searches} label="Søk" />
         <Stat value={d.kpis.signups} label="Nye kontoer" />
-        <Stat value={d.kpis.needs} label="Aktive leieønsker" />
+        <Stat value={d.kpis.needs} label="Aktive leieønsker" hint={d.kpis.pendingNeeds ? `+ ${d.kpis.pendingNeeds} ubekreftet` : undefined} />
         <Stat value={d.kpis.offers} label="Aktive lokaler" />
         <Stat value={d.kpis.inquiries} label="Forespørsler" />
       </div>
@@ -149,6 +149,7 @@ export default async function AdminPage() {
               <li key={need.id} className="flex flex-wrap items-center gap-x-4 gap-y-1 py-3 text-sm">
                 <Link href={`/annonse/${need.id}`} className="min-w-0 flex-1 font-semibold hover:underline">
                   {need.title}
+                  {need.status === 'pending' ? <span className="ml-2 rounded-full bg-warning/15 px-2 py-0.5 font-mono text-[10px] uppercase tracking-wider text-warning">ubekreftet</span> : null}
                 </Link>
                 <span className="text-muted">
                   {spaceTypeLabel(need.space_type)} · {need.city} · {formatSize(need)} m² · maks {formatNumber(need.price)} kr/mnd
@@ -188,7 +189,12 @@ export default async function AdminPage() {
               {d.leads.slice(0, 60).map((l) => (
                 <tr key={l.profile.user_id} className="align-top">
                   <td className="py-2.5 pr-3">
-                    <p className="font-semibold">{l.profile.name}</p>
+                    <p className="font-semibold">
+                      {l.profile.name}
+                      {l.needs.some((n) => n.status === 'pending') ? (
+                        <span className="ml-2 rounded-full bg-warning/15 px-2 py-0.5 align-middle font-mono text-[10px] uppercase tracking-wider text-warning">ubekreftet</span>
+                      ) : null}
+                    </p>
                     <p className="text-xs text-muted">{l.profile.company}</p>
                     {l.profile.contact_ok ? (
                       <p className="text-xs text-success">

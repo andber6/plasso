@@ -20,7 +20,11 @@ export default function PrivacyPage() {
 
       <h2>Hva vi lagrer</h2>
       <ul>
-        <li><strong>Konto:</strong> e-postadresse og passord (lagret kryptert).</li>
+        <li><strong>Konto:</strong> e-postadresse, og passord (lagret kryptert) hvis du bruker det. Logger du inn med e-postlenke, lagrer vi ikke noe passord.</li>
+        <li>
+          <strong>Leieønsker uten konto:</strong> sender du skjemaet på forsiden, lagrer vi det du fyller inn sammen med navn og e-post. Leieønsket blir ikke
+          synlig for andre før du har bekreftet e-posten.
+        </li>
         <li><strong>Profil:</strong> navn, firma, telefon, om du er leietaker, utleier eller megler, og om vi kan kontakte deg.</li>
         <li><strong>Annonser:</strong> leieønsker og utleieannonser med type, sted, areal, pris, tidspunkt, leietid, fasiliteter, beskrivelse og bilder.</li>
         <li><strong>Forespørsler</strong> om kontakt eller visning, og <strong>lagrede annonser, rapporter og blokkeringer</strong>.</li>
@@ -42,6 +46,12 @@ export default function PrivacyPage() {
       <p>
         Annonser er synlige for alle, med navnet og firmaet ditt. E-post og telefon deles bare med den du sender en forespørsel til, eller som sender en til
         deg.
+      </p>
+
+      <h2>Hvem behandler dataene</h2>
+      <p>
+        Nettsiden driftes hos Vercel, databasen hos Neon og bildene i Vercel Blob, alt i EU (Frankfurt). E-post sendes gjennom Resend. Disse behandler
+        opplysningene på våre vegne og bruker dem ikke til noe annet. Vi deler ikke opplysninger med andre, med mindre loven krever det.
       </p>
 
       <h2>Hvor lenge</h2>

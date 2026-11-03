@@ -11,7 +11,7 @@ const STATUSES = [
   { id: 'rented', label: 'Utleid' },
 ] as const;
 
-export function OwnerControls({ id, status }: { id: string; status: 'active' | 'paused' | 'rented' | 'hidden' }) {
+export function OwnerControls({ id, status }: { id: string; status: 'active' | 'paused' | 'rented' | 'hidden' | 'pending' }) {
   const [pending, start] = useTransition();
   if (status === 'hidden') {
     return (

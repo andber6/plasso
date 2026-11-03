@@ -87,7 +87,7 @@ export const posts = pgTable(
     image: text('image'),
     company: text('company').notNull().default(''),
     contact_name: text('contact_name').notNull().default(''),
-    /** active | paused | rented | hidden (hidden = removed by an admin after a report) */
+    /** active | paused | rented | hidden (removed by an admin) | pending (sent in without an account, e-mail not confirmed yet) */
     status: text('status').notNull().default('active'),
     created_at: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
   },
